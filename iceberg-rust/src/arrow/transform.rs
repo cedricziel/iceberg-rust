@@ -213,7 +213,7 @@ fn datepart_to_months(year: i32, month: i32) -> i32 {
 mod tests {
 
     use super::*;
-    use arrow::array::{ArrayRef, Date32Array, TimestampMicrosecondArray};
+    use arrow::array::{ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray};
 
     fn create_date32_array() -> ArrayRef {
         Arc::new(Date32Array::from(vec![
@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn test_identity_transform_int32() {
-        let array = Arc::new(arrow::array::Int32Array::from(vec![
+        let array = Arc::new(Int32Array::from(vec![
             Some(100),
             Some(200),
             Some(300),

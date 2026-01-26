@@ -241,6 +241,32 @@ mod tests {
     }
 
     #[test]
+    fn test_identity_transform_date32() {
+        let array = Arc::new(Date32Array::from(vec![
+            Some(19478), // 2023-05-01
+            Some(19523), // 2023-06-15
+            Some(19723), // 2024-01-01
+            None,
+        ])) as ArrayRef;
+        let result = transform_arrow(array.clone(), &Transform::Identity).unwrap();
+        assert_eq!(&array, &result);
+        assert_eq!(result.data_type(), &DataType::Date32);
+    }
+
+    #[test]
+    fn test_identity_transform_int32() {
+        let array = Arc::new(arrow::array::Int32Array::from(vec![
+            Some(100),
+            Some(200),
+            Some(300),
+            None,
+        ])) as ArrayRef;
+        let result = transform_arrow(array.clone(), &Transform::Identity).unwrap();
+        assert_eq!(&array, &result);
+        assert_eq!(result.data_type(), &DataType::Int32);
+    }
+
+    #[test]
     fn test_date32_day_transform() {
         let array = create_date32_array();
         let result = transform_arrow(array, &Transform::Day).unwrap();

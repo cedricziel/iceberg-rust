@@ -260,7 +260,7 @@ enum DistinctValues {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use arrow::array::Int32Array;
+    use arrow::array::{Date32Array, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use iceberg_rust_spec::spec::partition::{PartitionField, Transform};
     use iceberg_rust_spec::spec::types::{PrimitiveType, StructField, Type};
@@ -306,8 +306,6 @@ mod tests {
 
     #[test]
     fn test_identity_transform_date32() {
-        use arrow::array::Date32Array;
-
         // Create a record batch with Date32 column
         let schema = ArrowSchema::new(vec![
             Field::new("date_col", DataType::Date32, false),

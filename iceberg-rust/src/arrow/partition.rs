@@ -19,7 +19,7 @@ use arrow::{
         and, filter, filter_record_batch,
         kernels::cmp::{distinct, eq},
     },
-    datatypes::{ArrowPrimitiveType, DataType, Int32Type, Int64Type},
+    datatypes::{ArrowPrimitiveType, DataType, Date32Type, Int32Type, Int64Type},
     error::ArrowError,
     record_batch::RecordBatch,
 };
@@ -89,6 +89,15 @@ pub fn partition_record_batch<'a>(
                     ))
                 })
                 .collect::<Result<Vec<_>, ArrowError>>(),
+            DistinctValues::Date(set) => set
+                .into_iter()
+                .map(|x| {
+                    Ok((
+                        Value::Date(x),
+                        eq(&PrimitiveArray::<Date32Type>::new_scalar(x), value)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, ArrowError>>(),
             DistinctValues::String(set) => set
                 .into_iter()
                 .map(|x| {
@@ -126,6 +135,7 @@ pub fn partition_record_batch<'a>(
 /// # Supported Data Types
 /// * Int32 - Converted to DistinctValues::Int
 /// * Int64 - Converted to DistinctValues::Long
+/// * Date32 - Converted to DistinctValues::Date
 /// * Utf8 - Converted to DistinctValues::String
 fn distinct_values(array: ArrayRef) -> Result<DistinctValues, ArrowError> {
     match array.data_type() {
@@ -136,6 +146,10 @@ fn distinct_values(array: ArrayRef) -> Result<DistinctValues, ArrowError> {
         DataType::Int64 => Ok(DistinctValues::Long(distinct_values_primitive::<
             i64,
             Int64Type,
+        >(array)?)),
+        DataType::Date32 => Ok(DistinctValues::Date(distinct_values_primitive::<
+            i32,
+            Date32Type,
         >(array)?)),
         DataType::Utf8 => Ok(DistinctValues::String(distinct_values_string(array)?)),
         _ => Err(ArrowError::ComputeError(
@@ -233,9 +247,109 @@ fn distinct_values_string(array: ArrayRef) -> Result<HashSet<String>, ArrowError
 /// This enum stores unique values from different Arrow array types:
 /// * `Int` - Distinct 32-bit integer values
 /// * `Long` - Distinct 64-bit integer values  
+/// * `Date` - Distinct date values (days since Unix epoch as i32)
 /// * `String` - Distinct string values
 enum DistinctValues {
     Int(HashSet<i32>),
     Long(HashSet<i64>),
+    Date(HashSet<i32>),
     String(HashSet<String>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use arrow::array::{Date32Array, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+    use iceberg_rust_spec::spec::partition::{PartitionField, Transform};
+    use iceberg_rust_spec::spec::types::{PrimitiveType, StructField, Type};
+
+    #[test]
+    fn test_identity_transform_int32() {
+        // Create a record batch with Int32 column
+        let schema = ArrowSchema::new(vec![
+            Field::new("int_col", DataType::Int32, false),
+            Field::new("value", DataType::Int32, false),
+        ]);
+
+        let int_array = Arc::new(Int32Array::from(vec![100, 100, 200])) as ArrayRef;
+        let value_array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema), vec![int_array, value_array]).unwrap();
+
+        // Create partition field with identity transform on int
+        let partition_field = PartitionField::new(1, 1000, "int_col", Transform::Identity);
+        let struct_field = StructField {
+            id: 1,
+            name: "int_col".to_string(),
+            required: true,
+            field_type: Type::Primitive(PrimitiveType::Int),
+            doc: None,
+        };
+
+        let bound_field = BoundPartitionField::new(&partition_field, &struct_field);
+
+        // Partition the record batch
+        let result = partition_record_batch(&record_batch, &[bound_field]).unwrap();
+        let partitions: Vec<_> = result.collect::<Result<Vec<_>, _>>().unwrap();
+
+        // Should have 2 partitions (100 and 200)
+        assert_eq!(partitions.len(), 2);
+
+        // Check partition values
+        let partition_values: Vec<_> = partitions.iter().map(|(v, _)| v.clone()).collect();
+        assert!(partition_values.contains(&vec![Value::Int(100)]));
+        assert!(partition_values.contains(&vec![Value::Int(200)]));
+    }
+
+    #[test]
+    fn test_identity_transform_date32() {
+        // Create a record batch with Date32 column
+        let schema = ArrowSchema::new(vec![
+            Field::new("date_col", DataType::Date32, false),
+            Field::new("value", DataType::Int32, false),
+        ]);
+
+        // Use dates: 2023-05-01 (19478), 2023-05-01 (19478), 2023-06-15 (19523)
+        let date_array = Arc::new(Date32Array::from(vec![19478, 19478, 19523])) as ArrayRef;
+        let value_array = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema), vec![date_array, value_array]).unwrap();
+
+        // Create partition field with identity transform on date
+        let partition_field = PartitionField::new(1, 1000, "date_col", Transform::Identity);
+        let struct_field = StructField {
+            id: 1,
+            name: "date_col".to_string(),
+            required: true,
+            field_type: Type::Primitive(PrimitiveType::Date),
+            doc: None,
+        };
+
+        let bound_field = BoundPartitionField::new(&partition_field, &struct_field);
+
+        // Partition the record batch
+        let result = partition_record_batch(&record_batch, &[bound_field]).unwrap();
+        let partitions: Vec<_> = result.collect::<Result<Vec<_>, _>>().unwrap();
+
+        // Should have 2 partitions (19478 and 19523)
+        assert_eq!(partitions.len(), 2);
+
+        // Check partition values
+        let partition_values: Vec<_> = partitions.iter().map(|(v, _)| v.clone()).collect();
+        assert!(partition_values.contains(&vec![Value::Date(19478)]));
+        assert!(partition_values.contains(&vec![Value::Date(19523)]));
+
+        // Check record counts in each partition
+        for (values, batch) in partitions {
+            if values[0] == Value::Date(19478) {
+                assert_eq!(batch.num_rows(), 2);
+            } else if values[0] == Value::Date(19523) {
+                assert_eq!(batch.num_rows(), 1);
+            }
+        }
+    }
 }
